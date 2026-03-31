@@ -8,7 +8,8 @@ Capture ideas and resources, organise them into tracks (skill trees), track your
 
 Data lives in `~/.questlog/` as plain Markdown files + a JSON index, making it easy to read and edit directly, including by agents like Claude Code.
 
-## Install
+## Getting started
+### Install
 
 ```bash
 make install
@@ -16,7 +17,39 @@ make install
 go install ./cmd/qlog
 ```
 
-## Quick start
+### Agent skill
+
+Questlog is designed to be used with an agent (e.g. Claude Code)
+doing the hard work to find and prioritise resources.
+The repository contains a SKILL teaching your agent how to do this.\
+Install the skill in your agent with:
+```bash
+npx skills add TTitcombe/questlog
+```
+
+And run it with a description of what you want to learn about:
+
+```bash
+/create-questlog Understand LLM architecture and training, so that I can create tailored models for my team.
+```
+
+If you don't provide a topic when invoking the skill,
+your agent will default to inferring topics of interest to you from your conversations.
+
+### Accessing a track
+
+With resources in a learning track, enter "focus" mode to the next queued resources
+you can achieve without the time you have available:
+
+```bash
+# Minutes you have available to focus (defaults to 30).
+qlog focus --track <track-name> --minutes 60
+```
+
+This will open the resources in order. You can update their status and add notes to each one.
+(WORK TODO).
+
+## Quickstart commands
 
 ```bash
 # Capture a quick idea to your inbox
@@ -44,7 +77,8 @@ qlog done <id>
 qlog status
 ```
 
-## Commands
+## Detail
+### Commands
 
 | Command | Description |
 |---|---|
@@ -62,11 +96,11 @@ qlog status
 | `qlog search <query>` | Search by title and tags |
 | `qlog status` | Overview of all tracks and progress |
 
-## Resource types
+### Resource types
 
 `paper` · `video` · `book` · `article` · `note` · `idea`
 
-## Data format
+### Data format
 
 Each resource is a Markdown file with YAML frontmatter:
 
@@ -89,3 +123,9 @@ Your personal notes here...
 Tracks live at `~/.questlog/tracks/<name>/`, inbox items at `~/.questlog/inbox/`.
 
 If you edit files directly (or an agent does), run `qlog index rebuild` to resync the search index.
+
+## License
+
+MIT
+
+See [LICENSE](./LICENSE).
