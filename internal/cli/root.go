@@ -14,8 +14,9 @@ var dataDir string
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "qlog",
-		Short: "questlog — your personal learning tracker",
+		Use:     "qlog",
+		Short:   "questlog — your personal learning tracker",
+		Version: Version,
 		Long: `questlog (qlog) helps you capture ideas, track learning resources,
 and focus your study sessions. Think of it as your RPG quest log for knowledge.`,
 		SilenceUsage:  true,
@@ -46,6 +47,7 @@ and focus your study sessions. Think of it as your RPG quest log for knowledge.`
 	}
 
 	root.AddCommand(
+		newVersionCmd(),
 		newAddCmd(mustStore),
 		newInboxCmd(mustStore),
 		newTrackCmd(mustStore),
