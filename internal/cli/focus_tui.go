@@ -35,6 +35,10 @@ type focusModel struct {
 	statusCursor int
 	// transient feedback line
 	notice string
+	// session tracking
+	startedAt     time.Time
+	opened        []string             // resource IDs opened in browser (deduplicated)
+	statusChanges []model.StatusChange // status changes made during session
 }
 
 var focusStatuses = []model.Status{model.StatusUnread, model.StatusInProgress, model.StatusDone}
@@ -45,6 +49,7 @@ func newFocusModel(session, noEst []model.Resource, minutes int, s *store.FSStor
 		noEst:     noEst,
 		remaining: time.Duration(minutes) * time.Minute,
 		store:     s,
+		startedAt: time.Now(),
 	}
 }
 
@@ -96,25 +101,31 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				r := m.session[m.cursor]
-				opened := false
+				didOpen := false
 				if r.URL != "" {
 					if err := openBrowser(r.URL); err == nil {
-						opened = true
+						didOpen = true
+						m.opened = appendUnique(m.opened, r.ID)
 					}
 				}
 				// Mark in-progress if currently unread
-				if r.Status == model.StatusUnread {
+				wasUnread := r.Status == model.StatusUnread
+				if wasUnread {
 					r.Status = model.StatusInProgress
 					if err := m.store.SaveResource(r); err == nil {
 						m.session[m.cursor] = r
+						m.statusChanges = append(m.statusChanges, model.StatusChange{
+							ResourceID: r.ID,
+							To:         model.StatusInProgress,
+						})
 					}
 				}
 				switch {
-				case opened && r.Status == model.StatusInProgress:
+				case didOpen && wasUnread:
 					m.notice = "Opened in browser · marked in-progress"
-				case opened:
+				case didOpen:
 					m.notice = "Opened in browser"
-				case r.URL == "":
+				case r.URL == "" && wasUnread:
 					m.notice = "No URL — marked in-progress"
 				default:
 					m.notice = "Marked in-progress"
@@ -148,6 +159,10 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r := m.session[m.cursor]
 				r.Status = newStatus
 				if err := m.store.SaveResource(r); err == nil {
+					m.statusChanges = append(m.statusChanges, model.StatusChange{
+						ResourceID: r.ID,
+						To:         newStatus,
+					})
 					m.session[m.cursor] = r
 					m.notice = fmt.Sprintf("Status → %s", newStatus)
 				} else {
@@ -278,6 +293,15 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return string(runes[:n-1]) + "…"
+}
+
+func appendUnique(slice []string, s string) []string {
+	for _, v := range slice {
+		if v == s {
+			return slice
+		}
+	}
+	return append(slice, s)
 }
 
 func openBrowser(url string) error {
