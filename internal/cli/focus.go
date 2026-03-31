@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/TTitcombe/questlog/internal/cli/ui"
 	"github.com/TTitcombe/questlog/internal/model"
 	"github.com/TTitcombe/questlog/internal/store"
 )
@@ -19,7 +19,7 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "focus",
-		Short: "Suggest resources for a focus session",
+		Short: "Start an interactive focus session",
 		Example: `  qlog focus --minutes 30
   qlog focus --track llm --minutes 60`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -48,7 +48,7 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 				return nil
 			}
 
-			// Split into tiers
+			// Split into tiers: in-progress first, then others, then no estimate
 			var tier1, tier2, noEst []model.Resource
 			for _, r := range candidates {
 				if r.EstimatedMinutes == 0 {
@@ -66,7 +66,7 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 			sort.Slice(tier1, func(i, j int) bool { return byMins(tier1[i], tier1[j]) })
 			sort.Slice(tier2, func(i, j int) bool { return byMins(tier2[i], tier2[j]) })
 
-			// Greedy bin-pack
+			// Greedy bin-pack into session
 			var session []model.Resource
 			remaining := minutes
 			for _, r := range append(tier1, tier2...) {
@@ -76,48 +76,10 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 				}
 			}
 
-			header := fmt.Sprintf("Focus session — %d minutes", minutes)
-			if track != "" {
-				header += " · " + track
-			}
-			fmt.Println(ui.Bold.Render(header))
-			fmt.Println()
-
-			if len(session) == 0 {
-				// Nothing fits — show closest fit
-				fmt.Println(ui.Warning.Render("Nothing fits in the available time. Closest option:"))
-				closest := tier1
-				closest = append(closest, tier2...)
-				if len(closest) > 0 {
-					r := closest[0]
-					fmt.Printf("  %s  %s  %s  (~%dm)\n",
-						ui.StatusBadge(string(r.Status)),
-						ui.TypeBadge(string(r.Type)),
-						ui.Bold.Render(r.Title),
-						r.EstimatedMinutes,
-					)
-				}
-			} else {
-				used := minutes - remaining
-				fmt.Printf("Suggested (%d/%d min used):\n\n", used, minutes)
-				for _, r := range session {
-					fmt.Printf("  %s  %s  %s  %s\n",
-						ui.StatusBadge(string(r.Status)),
-						ui.TypeBadge(string(r.Type)),
-						ui.Bold.Render(r.Title),
-						ui.Dim.Render(fmt.Sprintf("~%dm", r.EstimatedMinutes)),
-					)
-				}
-			}
-
-			if len(noEst) > 0 {
-				fmt.Printf("\n%s\n", ui.Muted.Render("Also consider (no time estimate):"))
-				for _, r := range noEst {
-					fmt.Printf("  %s  %s\n", ui.TypeBadge(string(r.Type)), r.Title)
-				}
-			}
-
-			return nil
+			m := newFocusModel(session, noEst, minutes, s)
+			p := tea.NewProgram(m, tea.WithAltScreen())
+			_, err = p.Run()
+			return err
 		},
 	}
 

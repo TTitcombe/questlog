@@ -1,0 +1,294 @@
+package cli
+
+import (
+	"fmt"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/TTitcombe/questlog/internal/cli/ui"
+	"github.com/TTitcombe/questlog/internal/model"
+	"github.com/TTitcombe/questlog/internal/store"
+)
+
+type focusState int
+
+const (
+	focusStateNormal focusState = iota
+	focusStateStatusPick
+	focusStateTimesUp
+)
+
+type focusTickMsg time.Time
+
+type focusModel struct {
+	session   []model.Resource // resources that fit in the session
+	noEst     []model.Resource // resources with no time estimate
+	cursor    int
+	remaining time.Duration
+	state     focusState
+	store     *store.FSStore
+	// status picker
+	statusCursor int
+	// transient feedback line
+	notice string
+}
+
+var focusStatuses = []model.Status{model.StatusUnread, model.StatusInProgress, model.StatusDone}
+
+func newFocusModel(session, noEst []model.Resource, minutes int, s *store.FSStore) focusModel {
+	return focusModel{
+		session:   session,
+		noEst:     noEst,
+		remaining: time.Duration(minutes) * time.Minute,
+		store:     s,
+	}
+}
+
+func (m focusModel) Init() tea.Cmd {
+	return focusTick()
+}
+
+func focusTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return focusTickMsg(t)
+	})
+}
+
+func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case focusTickMsg:
+		if m.state == focusStateNormal {
+			m.remaining -= time.Second
+			if m.remaining <= 0 {
+				m.remaining = 0
+				m.state = focusStateTimesUp
+			}
+		}
+		return m, focusTick()
+
+	case tea.KeyMsg:
+		switch m.state {
+		case focusStateTimesUp:
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+
+		case focusStateNormal:
+			switch msg.String() {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+					m.notice = ""
+				}
+			case "down", "j":
+				if m.cursor < len(m.session)-1 {
+					m.cursor++
+					m.notice = ""
+				}
+			case "enter":
+				if len(m.session) == 0 {
+					break
+				}
+				r := m.session[m.cursor]
+				opened := false
+				if r.URL != "" {
+					if err := openBrowser(r.URL); err == nil {
+						opened = true
+					}
+				}
+				// Mark in-progress if currently unread
+				if r.Status == model.StatusUnread {
+					r.Status = model.StatusInProgress
+					if err := m.store.SaveResource(r); err == nil {
+						m.session[m.cursor] = r
+					}
+				}
+				switch {
+				case opened && r.Status == model.StatusInProgress:
+					m.notice = "Opened in browser · marked in-progress"
+				case opened:
+					m.notice = "Opened in browser"
+				case r.URL == "":
+					m.notice = "No URL — marked in-progress"
+				default:
+					m.notice = "Marked in-progress"
+				}
+			case "s":
+				if len(m.session) == 0 {
+					break
+				}
+				m.state = focusStateStatusPick
+				cur := m.session[m.cursor].Status
+				for i, s := range focusStatuses {
+					if s == cur {
+						m.statusCursor = i
+						break
+					}
+				}
+			}
+
+		case focusStateStatusPick:
+			switch msg.String() {
+			case "up", "k":
+				if m.statusCursor > 0 {
+					m.statusCursor--
+				}
+			case "down", "j":
+				if m.statusCursor < len(focusStatuses)-1 {
+					m.statusCursor++
+				}
+			case "enter":
+				newStatus := focusStatuses[m.statusCursor]
+				r := m.session[m.cursor]
+				r.Status = newStatus
+				if err := m.store.SaveResource(r); err == nil {
+					m.session[m.cursor] = r
+					m.notice = fmt.Sprintf("Status → %s", newStatus)
+				} else {
+					m.notice = "Error saving status"
+				}
+				m.state = focusStateNormal
+			case "esc", "q":
+				m.state = focusStateNormal
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m focusModel) View() string {
+	var b strings.Builder
+
+	// Header
+	timerStr := formatFocusDuration(m.remaining)
+	if m.state == focusStateTimesUp {
+		timerStr = ui.Warning.Render("Time's up!")
+	}
+	b.WriteString(ui.Bold.Render("Focus session") + "  " + timerStr + "\n\n")
+
+	// Resource list
+	if len(m.session) == 0 {
+		b.WriteString(ui.Muted.Render("Nothing fits in the session.") + "\n")
+	} else {
+		for i, r := range m.session {
+			prefix := "  "
+			if i == m.cursor && m.state != focusStateTimesUp {
+				prefix = ui.Highlight.Render("▶ ")
+			}
+
+			title := r.Title
+			if i == m.cursor && m.state != focusStateTimesUp {
+				title = ui.Bold.Render(r.Title)
+			}
+
+			est := ""
+			if r.EstimatedMinutes > 0 {
+				est = "  " + ui.Dim.Render(fmt.Sprintf("~%dm", r.EstimatedMinutes))
+			}
+
+			urlPart := "  " + ui.Muted.Render("no url")
+			if r.URL != "" {
+				urlPart = "  " + ui.Muted.Render(truncateStr(r.URL, 50))
+			}
+
+			trackPart := ""
+			if r.Track != "" && r.Track != "inbox" {
+				trackPart = "  " + ui.Dim.Render("["+r.Track+"]")
+			}
+
+			b.WriteString(fmt.Sprintf("%s%s  %s  %s%s%s%s\n",
+				prefix,
+				ui.StatusBadge(string(r.Status)),
+				ui.TypeBadge(string(r.Type)),
+				title,
+				est,
+				trackPart,
+				urlPart,
+			))
+		}
+	}
+
+	// No-estimate extras
+	if len(m.noEst) > 0 {
+		b.WriteString("\n" + ui.Muted.Render("Also consider (no estimate):") + "\n")
+		for _, r := range m.noEst {
+			urlPart := ""
+			if r.URL != "" {
+				urlPart = "  " + ui.Muted.Render(truncateStr(r.URL, 50))
+			}
+			b.WriteString(fmt.Sprintf("  %s  %s  %s%s\n",
+				ui.TypeBadge(string(r.Type)),
+				ui.StatusBadge(string(r.Status)),
+				r.Title,
+				urlPart,
+			))
+		}
+	}
+
+	b.WriteString("\n")
+
+	// Status picker
+	if m.state == focusStateStatusPick {
+		r := m.session[m.cursor]
+		b.WriteString(ui.Bold.Render(fmt.Sprintf("Set status for %q:", r.Title)) + "\n")
+		for i, s := range focusStatuses {
+			cur := "  "
+			if i == m.statusCursor {
+				cur = ui.Highlight.Render("▶ ")
+			}
+			b.WriteString(cur + ui.StatusBadge(string(s)) + "\n")
+		}
+		b.WriteString("\n" + ui.Muted.Render("enter confirm · esc cancel") + "\n")
+		return b.String()
+	}
+
+	// Notice + footer
+	if m.notice != "" {
+		b.WriteString(ui.Success.Render(m.notice) + "\n")
+	}
+	if m.state == focusStateTimesUp {
+		b.WriteString(ui.Muted.Render("Press q to exit") + "\n")
+	} else if len(m.session) > 0 {
+		b.WriteString(ui.Muted.Render("↑/↓ navigate · enter open+start · s set status · q quit") + "\n")
+	} else {
+		b.WriteString(ui.Muted.Render("q quit") + "\n")
+	}
+
+	return b.String()
+}
+
+func formatFocusDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0:00"
+	}
+	mins := int(d.Minutes())
+	secs := int(d.Seconds()) % 60
+	return fmt.Sprintf("%d:%02d", mins, secs)
+}
+
+func truncateStr(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
+}
+
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
+}
