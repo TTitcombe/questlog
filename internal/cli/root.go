@@ -60,6 +60,7 @@ and focus your study sessions. Think of it as your RPG quest log for knowledge.`
 		newSearchCmd(mustStore),
 		newStatusCmd(mustStore),
 		newIndexCmd(mustStore),
+		newTodayCmd(mustStore),
 	)
 
 	return root

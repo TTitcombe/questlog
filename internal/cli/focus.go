@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -78,8 +79,26 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 
 			m := newFocusModel(session, noEst, minutes, s)
 			p := tea.NewProgram(m, tea.WithAltScreen())
-			_, err = p.Run()
-			return err
+			finalModel, err := p.Run()
+			if err != nil {
+				return err
+			}
+
+			if fm, ok := finalModel.(focusModel); ok {
+				actualSecs := int(time.Since(fm.startedAt).Seconds())
+				if len(fm.opened) > 0 || len(fm.statusChanges) > 0 || actualSecs >= 60 {
+					sess := model.Session{
+						StartedAt:     fm.startedAt,
+						PlannedMins:   minutes,
+						ActualSecs:    actualSecs,
+						Track:         track,
+						Opened:        fm.opened,
+						StatusChanges: fm.statusChanges,
+					}
+					_ = s.AppendSession(sess)
+				}
+			}
+			return nil
 		},
 	}
 
