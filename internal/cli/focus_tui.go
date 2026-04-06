@@ -22,6 +22,7 @@ const (
 	focusStateTimesUp
 	focusStateNoteInput
 	focusStateRatingPick
+	focusStateBrowse
 )
 
 type focusTickMsg time.Time
@@ -40,6 +41,9 @@ type focusModel struct {
 	ratingPrompt string // header shown above rating picker
 	// note input
 	noteInput string
+	// browse picker
+	browseList   []model.Resource
+	browseCursor int
 	// transient feedback line
 	notice string
 	// session tracking
@@ -59,13 +63,14 @@ var focusRatings = []struct {
 	{-1, "-1  not worth it"},
 }
 
-func newFocusModel(session, noEst []model.Resource, minutes int, s *store.FSStore) focusModel {
+func newFocusModel(session, noEst, all []model.Resource, minutes int, s *store.FSStore) focusModel {
 	return focusModel{
-		session:   session,
-		noEst:     noEst,
-		remaining: time.Duration(minutes) * time.Minute,
-		store:     s,
-		startedAt: time.Now(),
+		session:    session,
+		noEst:      noEst,
+		browseList: all,
+		remaining:  time.Duration(minutes) * time.Minute,
+		store:      s,
+		startedAt:  time.Now(),
 	}
 }
 
@@ -158,6 +163,12 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+			case "b":
+				if len(m.browseList) == 0 {
+					break
+				}
+				m.browseCursor = 0
+				m.state = focusStateBrowse
 			case "n":
 				if len(m.session) == 0 {
 					break
@@ -233,7 +244,7 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.noteInput = string(runes[:len(runes)-1])
 				}
 			default:
-				if msg.Type == tea.KeyRunes {
+				if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
 					m.noteInput += msg.String()
 				}
 			}
@@ -258,6 +269,34 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.notice = "Error saving rating"
 				}
+				m.state = focusStateNormal
+			case "esc", "q":
+				m.state = focusStateNormal
+			}
+
+		case focusStateBrowse:
+			switch msg.String() {
+			case "up", "k":
+				if m.browseCursor > 0 {
+					m.browseCursor--
+				}
+			case "down", "j":
+				if m.browseCursor < len(m.browseList)-1 {
+					m.browseCursor++
+				}
+			case "enter":
+				picked := m.browseList[m.browseCursor]
+				// If already in session, move cursor there.
+				for i, r := range m.session {
+					if r.ID == picked.ID {
+						m.cursor = i
+						m.state = focusStateNormal
+						return m, nil
+					}
+				}
+				// Otherwise prepend to session and focus it.
+				m.session = append([]model.Resource{picked}, m.session...)
+				m.cursor = 0
 				m.state = focusStateNormal
 			case "esc", "q":
 				m.state = focusStateNormal
@@ -367,6 +406,34 @@ func (m focusModel) View() string {
 		return b.String()
 	}
 
+	// Browse picker
+	if m.state == focusStateBrowse {
+		b.WriteString(ui.Bold.Render("Choose a resource:") + "\n\n")
+		for i, r := range m.browseList {
+			prefix := "  "
+			if i == m.browseCursor {
+				prefix = ui.Highlight.Render("▶ ")
+			}
+			title := r.Title
+			if i == m.browseCursor {
+				title = ui.Bold.Render(r.Title)
+			}
+			est := ""
+			if r.EstimatedMinutes > 0 {
+				est = "  " + ui.Dim.Render(fmt.Sprintf("~%dm", r.EstimatedMinutes))
+			}
+			b.WriteString(fmt.Sprintf("%s%s  %s  %s%s\n",
+				prefix,
+				ui.StatusBadge(string(r.Status)),
+				ui.TypeBadge(string(r.Type)),
+				title,
+				est,
+			))
+		}
+		b.WriteString("\n" + ui.Muted.Render("↑/↓ navigate · enter pick · esc cancel") + "\n")
+		return b.String()
+	}
+
 	// Note input
 	if m.state == focusStateNoteInput {
 		b.WriteString(ui.Bold.Render("Add note:") + " " + m.noteInput + "▌\n")
@@ -381,7 +448,7 @@ func (m focusModel) View() string {
 	if m.state == focusStateTimesUp {
 		b.WriteString(ui.Muted.Render("Press q to exit") + "\n")
 	} else if len(m.session) > 0 {
-		b.WriteString(ui.Muted.Render("↑/↓ navigate · enter open+start · s status · n note · r rate · q quit") + "\n")
+		b.WriteString(ui.Muted.Render("↑/↓ navigate · enter open+start · s status · n note · r rate · b browse · q quit") + "\n")
 	} else {
 		b.WriteString(ui.Muted.Render("q quit") + "\n")
 	}

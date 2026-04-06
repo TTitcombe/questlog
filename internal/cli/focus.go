@@ -77,7 +77,7 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 				}
 			}
 
-			m := newFocusModel(session, noEst, minutes, s)
+			m := newFocusModel(session, noEst, candidates, minutes, s)
 			p := tea.NewProgram(m, tea.WithAltScreen())
 			finalModel, err := p.Run()
 			if err != nil {
