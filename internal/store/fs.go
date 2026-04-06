@@ -256,6 +256,22 @@ func (s *FSStore) ListResources(filter ResourceFilter) ([]model.Resource, error)
 	return resources, nil
 }
 
+// SearchNotes does a case-insensitive full-text scan of all resource note bodies.
+func (s *FSStore) SearchNotes(query string) ([]model.Resource, error) {
+	all, err := s.ListResources(ResourceFilter{})
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(query)
+	var results []model.Resource
+	for _, r := range all {
+		if strings.Contains(strings.ToLower(r.Notes), q) {
+			results = append(results, r)
+		}
+	}
+	return results, nil
+}
+
 // --- Inbox ---
 
 func (s *FSStore) ListInbox() ([]model.Resource, error) {

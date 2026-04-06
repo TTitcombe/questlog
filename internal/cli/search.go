@@ -12,8 +12,9 @@ import (
 
 func newSearchCmd(getStore func() *store.FSStore) *cobra.Command {
 	var (
-		track string
-		rtype string
+		track    string
+		rtype    string
+		inclNotes bool
 	)
 
 	cmd := &cobra.Command{
@@ -24,36 +25,48 @@ func newSearchCmd(getStore func() *store.FSStore) *cobra.Command {
 			s := getStore()
 			query := strings.Join(args, " ")
 
-			results, err := s.SearchIndex(query)
+			// Collect results: index search + optional notes scan, deduplicated by ID.
+			seen := map[string]bool{}
+			type result struct {
+				id, title, track, status, rtype string
+				mins                            int
+			}
+			var out []result
+
+			indexResults, err := s.SearchIndex(query)
 			if err != nil {
 				return err
 			}
-
-			// Filter by track/type flags
-			var filtered []interface{ GetTrack() string }
-			_ = filtered // unused; inline filtering below
-
-			var out []string
-			for _, e := range results {
+			for _, e := range indexResults {
 				if track != "" && e.Track != track {
 					continue
 				}
 				if rtype != "" && string(e.Type) != rtype {
 					continue
 				}
-				mins := ""
-				if e.EstimatedMinutes > 0 {
-					mins = fmt.Sprintf("  %s", ui.Dim.Render(fmt.Sprintf("~%dm", e.EstimatedMinutes)))
+				if !seen[e.ID] {
+					seen[e.ID] = true
+					out = append(out, result{e.ID, e.Title, e.Track, string(e.Status), string(e.Type), e.EstimatedMinutes})
 				}
-				line := fmt.Sprintf("  %s  %s  %s  %s%s\n     %s",
-					ui.StatusBadge(string(e.Status)),
-					ui.TypeBadge(string(e.Type)),
-					ui.Dim.Render("["+e.Track+"]"),
-					e.Title,
-					mins,
-					ui.Dim.Render(e.ID),
-				)
-				out = append(out, line)
+			}
+
+			if inclNotes {
+				noteResults, err := s.SearchNotes(query)
+				if err != nil {
+					return err
+				}
+				for _, r := range noteResults {
+					if track != "" && r.Track != track {
+						continue
+					}
+					if rtype != "" && string(r.Type) != rtype {
+						continue
+					}
+					if !seen[r.ID] {
+						seen[r.ID] = true
+						out = append(out, result{r.ID, r.Title, r.Track, string(r.Status), string(r.Type), r.EstimatedMinutes})
+					}
+				}
 			}
 
 			if len(out) == 0 {
@@ -62,7 +75,19 @@ func newSearchCmd(getStore func() *store.FSStore) *cobra.Command {
 			}
 
 			fmt.Printf("%s results for %q\n\n", ui.Highlight.Render(fmt.Sprintf("%d", len(out))), query)
-			for _, line := range out {
+			for _, e := range out {
+				mins := ""
+				if e.mins > 0 {
+					mins = fmt.Sprintf("  %s", ui.Dim.Render(fmt.Sprintf("~%dm", e.mins)))
+				}
+				line := fmt.Sprintf("  %s  %s  %s  %s%s\n     %s",
+					ui.StatusBadge(e.status),
+					ui.TypeBadge(e.rtype),
+					ui.Dim.Render("["+e.track+"]"),
+					e.title,
+					mins,
+					ui.Dim.Render(e.id),
+				)
 				fmt.Println(line)
 			}
 			return nil
@@ -71,5 +96,6 @@ func newSearchCmd(getStore func() *store.FSStore) *cobra.Command {
 
 	cmd.Flags().StringVarP(&track, "track", "t", "", "filter results by track")
 	cmd.Flags().StringVar(&rtype, "type", "", "filter results by type")
+	cmd.Flags().BoolVar(&inclNotes, "notes", false, "also search resource note bodies (slower)")
 	return cmd
 }
