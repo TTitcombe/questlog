@@ -23,6 +23,7 @@ type frontmatter struct {
 	Status           model.Status       `yaml:"status"`
 	Progress         int                `yaml:"progress,omitempty"`
 	Priority         int                `yaml:"priority,omitempty"`
+	Rating           *int               `yaml:"rating,omitempty"`
 }
 
 // parseMarkdown parses a resource markdown file into a model.Resource.
@@ -63,6 +64,7 @@ func parseMarkdown(content []byte, id, filePath string) (model.Resource, error) 
 		Status:           fm.Status,
 		Progress:         fm.Progress,
 		Priority:         fm.Priority,
+		Rating:           fm.Rating,
 		Notes:            body,
 		FilePath:         filePath,
 	}, nil
@@ -81,6 +83,7 @@ func marshalMarkdown(r model.Resource) ([]byte, error) {
 		Status:           r.Status,
 		Progress:         r.Progress,
 		Priority:         r.Priority,
+		Rating:           r.Rating,
 	}
 
 	yamlBytes, err := yaml.Marshal(fm)

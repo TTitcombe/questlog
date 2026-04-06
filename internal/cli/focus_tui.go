@@ -20,6 +20,8 @@ const (
 	focusStateNormal focusState = iota
 	focusStateStatusPick
 	focusStateTimesUp
+	focusStateNoteInput
+	focusStateRatingPick
 )
 
 type focusTickMsg time.Time
@@ -33,6 +35,11 @@ type focusModel struct {
 	store     *store.FSStore
 	// status picker
 	statusCursor int
+	// rating picker
+	ratingCursor int
+	ratingPrompt string // header shown above rating picker
+	// note input
+	noteInput string
 	// transient feedback line
 	notice string
 	// session tracking
@@ -42,6 +49,15 @@ type focusModel struct {
 }
 
 var focusStatuses = []model.Status{model.StatusUnread, model.StatusInProgress, model.StatusDone}
+
+var focusRatings = []struct {
+	value int
+	label string
+}{
+	{1, "+1  valuable"},
+	{0, " 0  neutral"},
+	{-1, "-1  not worth it"},
+}
 
 func newFocusModel(session, noEst []model.Resource, minutes int, s *store.FSStore) focusModel {
 	return focusModel{
@@ -142,6 +158,19 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						break
 					}
 				}
+			case "n":
+				if len(m.session) == 0 {
+					break
+				}
+				m.noteInput = ""
+				m.state = focusStateNoteInput
+			case "r":
+				if len(m.session) == 0 {
+					break
+				}
+				m.ratingPrompt = fmt.Sprintf("Rate %q:", m.session[m.cursor].Title)
+				m.ratingCursor = 0
+				m.state = focusStateRatingPick
 			}
 
 		case focusStateStatusPick:
@@ -167,6 +196,67 @@ func (m focusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = fmt.Sprintf("Status → %s", newStatus)
 				} else {
 					m.notice = "Error saving status"
+				}
+				// Auto-prompt for rating when marking done and resource has no rating.
+				if newStatus == model.StatusDone && m.session[m.cursor].Rating == nil {
+					m.ratingPrompt = "How valuable was this?"
+					m.ratingCursor = 0
+					m.state = focusStateRatingPick
+				} else {
+					m.state = focusStateNormal
+				}
+			case "esc", "q":
+				m.state = focusStateNormal
+			}
+
+		case focusStateNoteInput:
+			switch msg.String() {
+			case "esc":
+				m.noteInput = ""
+				m.state = focusStateNormal
+			case "enter":
+				if strings.TrimSpace(m.noteInput) != "" {
+					r := m.session[m.cursor]
+					r.Notes = prependNote(r.Notes, m.noteInput, time.Now())
+					if err := m.store.SaveResource(r); err == nil {
+						m.session[m.cursor] = r
+						m.notice = "Note saved"
+					} else {
+						m.notice = "Error saving note"
+					}
+				}
+				m.noteInput = ""
+				m.state = focusStateNormal
+			case "backspace":
+				if len(m.noteInput) > 0 {
+					runes := []rune(m.noteInput)
+					m.noteInput = string(runes[:len(runes)-1])
+				}
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.noteInput += msg.String()
+				}
+			}
+
+		case focusStateRatingPick:
+			switch msg.String() {
+			case "up", "k":
+				if m.ratingCursor > 0 {
+					m.ratingCursor--
+				}
+			case "down", "j":
+				if m.ratingCursor < len(focusRatings)-1 {
+					m.ratingCursor++
+				}
+			case "enter":
+				v := focusRatings[m.ratingCursor].value
+				r := m.session[m.cursor]
+				r.Rating = &v
+				if err := m.store.SaveResource(r); err == nil {
+					m.session[m.cursor] = r
+					m.notice = fmt.Sprintf("Rated: %s", formatRating(&v))
+				} else {
+					m.notice = "Error saving rating"
 				}
 				m.state = focusStateNormal
 			case "esc", "q":
@@ -263,6 +353,27 @@ func (m focusModel) View() string {
 		return b.String()
 	}
 
+	// Rating picker
+	if m.state == focusStateRatingPick {
+		b.WriteString(ui.Bold.Render(m.ratingPrompt) + "\n")
+		for i, opt := range focusRatings {
+			cur := "  "
+			if i == m.ratingCursor {
+				cur = ui.Highlight.Render("▶ ")
+			}
+			b.WriteString(cur + opt.label + "\n")
+		}
+		b.WriteString("\n" + ui.Muted.Render("enter confirm · esc skip") + "\n")
+		return b.String()
+	}
+
+	// Note input
+	if m.state == focusStateNoteInput {
+		b.WriteString(ui.Bold.Render("Add note:") + " " + m.noteInput + "▌\n")
+		b.WriteString(ui.Muted.Render("enter save · esc cancel") + "\n")
+		return b.String()
+	}
+
 	// Notice + footer
 	if m.notice != "" {
 		b.WriteString(ui.Success.Render(m.notice) + "\n")
@@ -270,7 +381,7 @@ func (m focusModel) View() string {
 	if m.state == focusStateTimesUp {
 		b.WriteString(ui.Muted.Render("Press q to exit") + "\n")
 	} else if len(m.session) > 0 {
-		b.WriteString(ui.Muted.Render("↑/↓ navigate · enter open+start · s set status · q quit") + "\n")
+		b.WriteString(ui.Muted.Render("↑/↓ navigate · enter open+start · s status · n note · r rate · q quit") + "\n")
 	} else {
 		b.WriteString(ui.Muted.Render("q quit") + "\n")
 	}

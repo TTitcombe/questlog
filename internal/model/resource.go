@@ -55,6 +55,7 @@ type Resource struct {
 	Status           Status       `yaml:"status"`
 	Progress         int          `yaml:"progress,omitempty"`
 	Priority         int          `yaml:"priority,omitempty"` // 1 (highest) – 5 (lowest), 0 = unset
+	Rating           *int         // nil = unset, -1/0/1
 	Notes            string       // markdown body after frontmatter
 	FilePath         string       // absolute path on disk, not persisted
 }
