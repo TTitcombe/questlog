@@ -24,6 +24,7 @@ func New(dataDir string) (*FSStore, error) {
 		dataDir,
 		filepath.Join(dataDir, "tracks"),
 		filepath.Join(dataDir, "inbox"),
+		filepath.Join(dataDir, "goals"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -92,6 +93,15 @@ func (s *FSStore) ListTracks() ([]model.Track, error) {
 		tracks = append(tracks, t)
 	}
 	return tracks, nil
+}
+
+func (s *FSStore) SaveTrack(t model.Track) error {
+	path := filepath.Join(s.dataDir, "tracks", t.Name, "track.json")
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 // --- Resource operations ---

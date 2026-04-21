@@ -24,6 +24,7 @@ func newAddCmd(getStore func() *store.FSStore) *cobra.Command {
 		track    string
 		minutes  int
 		priority int
+		isCore   bool
 	)
 
 	cmd := &cobra.Command{
@@ -108,6 +109,7 @@ func newAddCmd(getStore func() *store.FSStore) *cobra.Command {
 				EstimatedMinutes: minutes,
 				Status:           model.StatusUnread,
 				Priority:         priority,
+				IsCore:           isCore,
 			}
 			if err := s.SaveResource(r); err != nil {
 				return err
@@ -125,6 +127,7 @@ func newAddCmd(getStore func() *store.FSStore) *cobra.Command {
 	cmd.Flags().StringVarP(&track, "track", "t", "inbox", "track name (default: inbox)")
 	cmd.Flags().IntVar(&minutes, "minutes", 0, "estimated minutes to complete")
 	cmd.Flags().IntVar(&priority, "priority", 0, "priority 1 (highest) to 5 (lowest), 0 = unset")
+	cmd.Flags().BoolVar(&isCore, "core", false, "mark as a core (non-negotiable) resource for its track")
 
 	return cmd
 }

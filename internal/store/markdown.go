@@ -23,6 +23,7 @@ type frontmatter struct {
 	Status           model.Status       `yaml:"status"`
 	Progress         int                `yaml:"progress,omitempty"`
 	Priority         int                `yaml:"priority,omitempty"`
+	IsCore           bool               `yaml:"is_core,omitempty"`
 	Rating           *int               `yaml:"rating,omitempty"`
 }
 
@@ -64,6 +65,7 @@ func parseMarkdown(content []byte, id, filePath string) (model.Resource, error) 
 		Status:           fm.Status,
 		Progress:         fm.Progress,
 		Priority:         fm.Priority,
+		IsCore:           fm.IsCore,
 		Rating:           fm.Rating,
 		Notes:            body,
 		FilePath:         filePath,
@@ -83,6 +85,7 @@ func marshalMarkdown(r model.Resource) ([]byte, error) {
 		Status:           r.Status,
 		Progress:         r.Progress,
 		Priority:         r.Priority,
+		IsCore:           r.IsCore,
 		Rating:           r.Rating,
 	}
 

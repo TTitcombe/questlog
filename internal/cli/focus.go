@@ -12,6 +12,88 @@ import (
 	"github.com/TTitcombe/questlog/internal/store"
 )
 
+func buildGoalContext(s *store.FSStore, trackFlag string) *goalContext {
+	if trackFlag != "" {
+		return nil
+	}
+	goals, err := s.ListGoals()
+	if err != nil || len(goals) == 0 {
+		return nil
+	}
+
+	// Pick the goal with the nearest pending milestone deadline.
+	var picked *model.Goal
+	for i := range goals {
+		g := &goals[i]
+		for _, m := range g.Milestones {
+			if m.CompletedAt == nil && m.Deadline != nil {
+				if picked == nil {
+					picked = g
+				} else {
+					for _, pm := range picked.Milestones {
+						if pm.CompletedAt == nil && pm.Deadline != nil {
+							if m.Deadline.Before(*pm.Deadline) {
+								picked = g
+							}
+							break
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+	if picked == nil {
+		picked = &goals[0]
+	}
+
+	allTracks, _ := s.ListTracks()
+	var goalTracks []model.Track
+	for _, t := range allTracks {
+		if t.GoalSlug == picked.Slug {
+			goalTracks = append(goalTracks, t)
+		}
+	}
+
+	resources := make(map[string][]model.Resource, len(goalTracks))
+	for _, t := range goalTracks {
+		res, _ := s.ListResources(store.ResourceFilter{Track: t.Name})
+		resources[t.Name] = res
+	}
+
+	gp := model.ComputeGoalProgress(*picked, goalTracks, resources)
+
+	var available []string
+	var pending []string
+	for _, tp := range gp.Tracks {
+		if tp.Status == model.TrackStatusAvailable {
+			available = append(available, tp.Track.Name)
+			for _, m := range tp.Track.Milestones {
+				if m.CompletedAt == nil && m.Deadline != nil {
+					pending = append(pending, fmt.Sprintf("%s · due %s [%s]",
+						m.Description, m.Deadline.Format("Jan 2"), tp.Track.Name))
+					break
+				}
+			}
+		}
+	}
+	for _, m := range picked.Milestones {
+		if m.CompletedAt == nil && m.Deadline != nil {
+			pending = append(pending, fmt.Sprintf("%s · due %s [goal]",
+				m.Description, m.Deadline.Format("Jan 2")))
+			break
+		}
+	}
+
+	return &goalContext{
+		goalTitle:         picked.Title,
+		pendingMilestones: pending,
+		availableTracks:   available,
+		tracksComplete:    gp.TracksComplete,
+		tracksTotal:       gp.TracksTotal,
+	}
+}
+
 func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 	var (
 		track   string
@@ -26,10 +108,23 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := getStore()
 
-			filter := store.ResourceFilter{Track: track}
-			all, err := s.ListResources(filter)
-			if err != nil {
-				return err
+			gc := buildGoalContext(s, track)
+
+			var all []model.Resource
+			if gc != nil && len(gc.availableTracks) > 0 {
+				for _, name := range gc.availableTracks {
+					res, err := s.ListResources(store.ResourceFilter{Track: name})
+					if err != nil {
+						return err
+					}
+					all = append(all, res...)
+				}
+			} else {
+				var err error
+				all, err = s.ListResources(store.ResourceFilter{Track: track})
+				if err != nil {
+					return err
+				}
 			}
 
 			// Exclude done resources
@@ -77,7 +172,7 @@ func newFocusCmd(getStore func() *store.FSStore) *cobra.Command {
 				}
 			}
 
-			m := newFocusModel(session, noEst, candidates, minutes, s)
+			m := newFocusModel(session, noEst, candidates, minutes, s, gc)
 			p := tea.NewProgram(m, tea.WithAltScreen())
 			finalModel, err := p.Run()
 			if err != nil {

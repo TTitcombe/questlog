@@ -16,6 +16,14 @@ type Store interface {
 	GetTrack(name string) (model.Track, error)
 	ListTracks() ([]model.Track, error)
 
+	// Goal operations
+	SaveGoal(g model.Goal) error
+	LoadGoal(slug string) (model.Goal, error)
+	ListGoals() ([]model.Goal, error)
+
+	// SaveTrack updates an existing track's metadata (goal link, deps, milestones).
+	SaveTrack(t model.Track) error
+
 	// Resource operations
 	SaveResource(resource model.Resource) error
 	GetResource(id string) (model.Resource, error)

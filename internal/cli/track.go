@@ -21,6 +21,9 @@ func newTrackCmd(getStore func() *store.FSStore) *cobra.Command {
 		newTrackNewCmd(getStore),
 		newTrackListCmd(getStore),
 		newTrackShowCmd(getStore),
+		newTrackSetGoalCmd(getStore),
+		newTrackDependsOnCmd(getStore),
+		newTrackMilestoneCmd(getStore),
 	)
 	return track
 }
@@ -28,6 +31,7 @@ func newTrackCmd(getStore func() *store.FSStore) *cobra.Command {
 func newTrackNewCmd(getStore func() *store.FSStore) *cobra.Command {
 	var description string
 	var tags string
+	var goalSlug string
 
 	cmd := &cobra.Command{
 		Use:   "new <name>",
@@ -40,6 +44,12 @@ func newTrackNewCmd(getStore func() *store.FSStore) *cobra.Command {
 			// Check it doesn't already exist
 			if _, err := s.GetTrack(name); err == nil {
 				return fmt.Errorf("track %q already exists", name)
+			}
+
+			if goalSlug != "" {
+				if _, err := s.LoadGoal(goalSlug); err != nil {
+					return fmt.Errorf("goal %q not found; create it first with: qlog goal new", goalSlug)
+				}
 			}
 
 			var tagList []string
@@ -55,6 +65,7 @@ func newTrackNewCmd(getStore func() *store.FSStore) *cobra.Command {
 				Description: description,
 				Tags:        tagList,
 				Created:     time.Now(),
+				GoalSlug:    goalSlug,
 			}
 			if err := s.CreateTrack(t); err != nil {
 				return err
@@ -65,6 +76,7 @@ func newTrackNewCmd(getStore func() *store.FSStore) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "track description")
 	cmd.Flags().StringVar(&tags, "tags", "", "comma-separated tags")
+	cmd.Flags().StringVar(&goalSlug, "goal", "", "link this track to a goal (goal slug)")
 	return cmd
 }
 
@@ -176,4 +188,191 @@ func newTrackShowCmd(getStore func() *store.FSStore) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newTrackSetGoalCmd(getStore func() *store.FSStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-goal <track-name> <goal-slug>",
+		Short: "Link a track to a goal",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := getStore()
+			trackName, goalSlug := args[0], args[1]
+
+			t, err := s.GetTrack(trackName)
+			if err != nil {
+				return err
+			}
+			if _, err := s.LoadGoal(goalSlug); err != nil {
+				return fmt.Errorf("goal %q not found", goalSlug)
+			}
+
+			t.GoalSlug = goalSlug
+			if err := s.SaveTrack(t); err != nil {
+				return err
+			}
+			fmt.Printf("%s Linked %s → goal %s\n",
+				ui.Success.Render("✓"), ui.Highlight.Render(trackName), ui.Highlight.Render(goalSlug))
+			return nil
+		},
+	}
+}
+
+func newTrackDependsOnCmd(getStore func() *store.FSStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "depends-on <track-name> <dependency-track>",
+		Short: "Add a prerequisite track",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := getStore()
+			trackName, dep := args[0], args[1]
+
+			t, err := s.GetTrack(trackName)
+			if err != nil {
+				return err
+			}
+			if _, err := s.GetTrack(dep); err != nil {
+				return fmt.Errorf("dependency track %q not found", dep)
+			}
+
+			for _, existing := range t.DependsOn {
+				if existing == dep {
+					fmt.Printf("%s already depends on %s\n", trackName, dep)
+					return nil
+				}
+			}
+
+			t.DependsOn = append(t.DependsOn, dep)
+
+			allTracks, err := s.ListTracks()
+			if err != nil {
+				return err
+			}
+			for i, tt := range allTracks {
+				if tt.Name == trackName {
+					allTracks[i] = t
+				}
+			}
+			if model.HasCycle(allTracks) {
+				return fmt.Errorf("adding dependency %q → %q would create a cycle", trackName, dep)
+			}
+
+			if err := s.SaveTrack(t); err != nil {
+				return err
+			}
+			fmt.Printf("%s %s now depends on %s\n",
+				ui.Success.Render("✓"), ui.Highlight.Render(trackName), ui.Highlight.Render(dep))
+			return nil
+		},
+	}
+}
+
+func newTrackMilestoneCmd(getStore func() *store.FSStore) *cobra.Command {
+	ms := &cobra.Command{
+		Use:   "milestone",
+		Short: "Manage track milestones",
+	}
+	ms.AddCommand(
+		newTrackMilestoneAddCmd(getStore),
+		newTrackMilestoneDoneCmd(getStore),
+	)
+	return ms
+}
+
+func newTrackMilestoneAddCmd(getStore func() *store.FSStore) *cobra.Command {
+	var (
+		description string
+		deadline    string
+		artifact    string
+	)
+	cmd := &cobra.Command{
+		Use:   "add <track-name>",
+		Short: "Add a milestone to a track",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := getStore()
+			t, err := s.GetTrack(args[0])
+			if err != nil {
+				return err
+			}
+
+			if description == "" {
+				description = mustPrompt("Milestone description", "", func(v string) error {
+					if strings.TrimSpace(v) == "" {
+						return fmt.Errorf("description cannot be empty")
+					}
+					return nil
+				})
+			}
+
+			m := model.Milestone{
+				ID:                 store.Slugify(description),
+				Description:        description,
+				ArtifactResourceID: artifact,
+			}
+			if deadline != "" {
+				d, err := time.Parse("2006-01-02", deadline)
+				if err != nil {
+					return fmt.Errorf("deadline must be YYYY-MM-DD, got %q", deadline)
+				}
+				m.Deadline = &d
+			}
+
+			t.Milestones = append(t.Milestones, m)
+			if err := s.SaveTrack(t); err != nil {
+				return err
+			}
+			fmt.Printf("%s Added milestone to %s: %s\n",
+				ui.Success.Render("✓"), ui.Highlight.Render(t.Name), m.Description)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "milestone description")
+	cmd.Flags().StringVar(&deadline, "deadline", "", "target date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&artifact, "artifact", "", "questlog resource ID proving completion")
+	return cmd
+}
+
+func newTrackMilestoneDoneCmd(getStore func() *store.FSStore) *cobra.Command {
+	var artifact string
+	cmd := &cobra.Command{
+		Use:   "done <track-name> <milestone-id>",
+		Short: "Mark a track milestone complete",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := getStore()
+			t, err := s.GetTrack(args[0])
+			if err != nil {
+				return err
+			}
+
+			found := false
+			now := time.Now()
+			for i, m := range t.Milestones {
+				if m.ID == args[1] {
+					t.Milestones[i].CompletedAt = &now
+					if artifact != "" {
+						t.Milestones[i].ArtifactResourceID = artifact
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				ids := make([]string, len(t.Milestones))
+				for i, m := range t.Milestones {
+					ids[i] = m.ID
+				}
+				return fmt.Errorf("milestone %q not found; available: %v", args[1], ids)
+			}
+
+			if err := s.SaveTrack(t); err != nil {
+				return err
+			}
+			fmt.Printf("%s Milestone complete: %s\n", ui.Success.Render("✓"), args[1])
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&artifact, "artifact", "", "questlog resource ID proving completion")
+	return cmd
 }

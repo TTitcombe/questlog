@@ -47,3 +47,8 @@ func uniqueSlug(title, dir string) string {
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
 }
+
+// Slugify is the exported variant of slugify for use outside this package.
+func Slugify(title string) string {
+	return slugify(title)
+}

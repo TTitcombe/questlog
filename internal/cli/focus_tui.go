@@ -27,6 +27,14 @@ const (
 
 type focusTickMsg time.Time
 
+type goalContext struct {
+	goalTitle         string
+	pendingMilestones []string
+	availableTracks   []string
+	tracksComplete    int
+	tracksTotal       int
+}
+
 type focusModel struct {
 	session   []model.Resource // resources that fit in the session
 	noEst     []model.Resource // resources with no time estimate
@@ -34,6 +42,7 @@ type focusModel struct {
 	remaining time.Duration
 	state     focusState
 	store     *store.FSStore
+	gc        *goalContext // nil when no active goal
 	// status picker
 	statusCursor int
 	// rating picker
@@ -63,7 +72,7 @@ var focusRatings = []struct {
 	{-1, "-1  not worth it"},
 }
 
-func newFocusModel(session, noEst, all []model.Resource, minutes int, s *store.FSStore) focusModel {
+func newFocusModel(session, noEst, all []model.Resource, minutes int, s *store.FSStore, gc *goalContext) focusModel {
 	return focusModel{
 		session:    session,
 		noEst:      noEst,
@@ -71,6 +80,7 @@ func newFocusModel(session, noEst, all []model.Resource, minutes int, s *store.F
 		remaining:  time.Duration(minutes) * time.Minute,
 		store:      s,
 		startedAt:  time.Now(),
+		gc:         gc,
 	}
 }
 
@@ -314,6 +324,23 @@ func (m focusModel) View() string {
 	if m.state == focusStateTimesUp {
 		timerStr = ui.Warning.Render("Time's up!")
 	}
+
+	if m.gc != nil {
+		pct := 0
+		if m.gc.tracksTotal > 0 {
+			pct = m.gc.tracksComplete * 100 / m.gc.tracksTotal
+		}
+		b.WriteString(ui.Bold.Render("Goal: "+m.gc.goalTitle) +
+			"  " + ui.Dim.Render(fmt.Sprintf("[%d%%]", pct)) + "\n")
+		if len(m.gc.availableTracks) > 0 {
+			b.WriteString(ui.Muted.Render("Available: "+strings.Join(m.gc.availableTracks, ", ")) + "\n")
+		}
+		for _, ms := range m.gc.pendingMilestones {
+			b.WriteString(ui.Warning.Render("⚑ "+ms) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString(ui.Bold.Render("Focus session") + "  " + timerStr + "\n\n")
 
 	// Resource list
